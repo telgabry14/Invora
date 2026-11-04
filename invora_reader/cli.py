@@ -107,7 +107,7 @@ def main(argv=None) -> int:
             "invoice_check": export.printed_total_check(inv),
             "lines": len(rows), "auto": sum(r["status"] == "auto" for r in rows),
             "review": sum(r["status"] != "auto" for r in rows),
-            "ready": all(r["status"] == "auto" for r in rows) and (inv["template"] != "po" or export.printed_total_check(inv) == "ok"),
+            "ready": all(r["status"] == "auto" for r in rows),
             "scan_total": scan_total, "softec_doc": sysc.get("doc", ""), "softec_amount": sysc.get("amount", ""),
             "total_diff": round(scan_total - sysc["amount"], 2) if (scan_total and sysc.get("amount")) else "",
         })

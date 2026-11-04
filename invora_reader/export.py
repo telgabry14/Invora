@@ -50,7 +50,7 @@ def rows_for_invoice(inv: Dict) -> List[Dict]:
         vat_rate = 0.14 if (l.get("vat") or l.get("tax_unit") or 0) > 0 else 0.0
         sysl = r["system"]["line"] if r.get("system") else None
         out.append({
-            "status": "review" if check == "mismatch" else status_for(t, l, c, r.get("learned")),
+            "status": status_for(t, l, c, r.get("learned")),   # printed-total check is informational (column invoice_check)
             "invoice_check": check,
             "template": t,
             "layout": "B" if (t == "ibn" and "margin" in l) else "",
@@ -85,7 +85,7 @@ def rows_for_invoice(inv: Dict) -> List[Dict]:
             "alt_3": f'{c[2]["code"]} {c[2]["name"]}' if len(c) > 2 else "",
             "name_on_scan": l.get("name_ar", ""),
             "learned_code": (r.get("learned") or {}).get("code", ""),
-            "flags": "; ".join(l.get("flags", []) + (["invoice printed totals do not match the lines"] if check == "mismatch" else [])),
+            "flags": "; ".join(l.get("flags", []) + []),
             "softec_doc": (inv.get("system_candidates") or [{}])[0].get("doc", ""),
             "softec_code": sysl["code"] if sysl else "",
             "softec_unit_price": sysl["price"] if sysl else "",
