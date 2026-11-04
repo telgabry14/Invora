@@ -86,3 +86,14 @@ def test_learned_alias_overrides_name_mismatch(tmp_path):
     row = link.line_candidates(inv, m, learned=store)[0]
     assert row["cands"][0]["code"] == "1" and row["learned"]["count"] == 2
     assert export.status_for("ibn", inv["lines"][0], row["cands"], row["learned"]) == "auto"
+
+
+def test_printed_total_check_detects_missing_line():
+    from invora_reader import export
+    lines = [dict(ok=True, total=799.16, tax_unit=24.54, tax_total=98.16),
+             dict(ok=True, total=177.6, tax_unit=0.0, tax_total=0.0),
+             dict(ok=True, total=2516.4, tax_unit=0.0, tax_total=0.0)]
+    inv = {"template": "po", "lines": lines, "totals": {"printed_values": [701.0, 2694.0, 98.16]}}
+    assert export.printed_total_check(inv) == "ok"          # 177.6 + 2516.4 = 2694.0 ; 799.16 - 98.16 = 701.0
+    inv["lines"] = lines[:2]                                  # a line got lost
+    assert export.printed_total_check(inv) == "mismatch"

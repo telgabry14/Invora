@@ -72,9 +72,21 @@ DIGIT_H = 19.0
 DISC = re.compile(r"^\d{1,2}(\.\d{1,2})?$")
 
 
+TAXTOK = re.compile(r"^\d{1,3}\.\d{3}$")
+
+
+def _has_tax_cell(t: Tok, toks: List[Tok]) -> bool:
+    """A real discount anchor has a 'dd.ddd' VAT-per-unit cell ~90px (at s=1) to its right, same row."""
+    s = max(t.h / DIGIT_H, 0.5)
+    return any(TAXTOK.match(u.text) and u.conf >= 50 and abs(u.cx - (t.cx + OFF["tax_unit"] * s)) <= 40 * s
+               and abs(u.cy - t.cy) <= 30 * s for u in toks)
+
+
 def _anchors(toks: List[Tok], W: int) -> List[Tok]:
     """Discount-% tokens: short clean numbers in one narrow, slightly slanted x column."""
     cand = [t for t in toks if DISC.match(t.text) and t.conf >= 80 and t.w < 0.02 * W + 40 and t.h < 40]
+    withtax = [t for t in cand if _has_tax_cell(t, toks)]
+    cand = withtax or cand
     if len(cand) < 1:
         return []
     cols = _cluster_x(cand, gap=0.012 * W + 14)
@@ -149,7 +161,19 @@ def read_page(clean: np.ndarray) -> Dict:
         if dropped:
             warn.append(f"dropped {len(dropped)} inconsistent row(s) (likely totals-box tokens)")
         lines = [l for l in lines if l.ok]
-    return {"lines": [l.to_dict() for l in lines], "scale": round(s, 3), "warnings": warn}
+    return {"lines": [l.to_dict() for l in lines], "scale": round(s, 3), "warnings": warn,
+            "totals": _printed_values(toks, rows, s)}
+
+
+def _printed_values(toks: List[Tok], rows: List[tuple], s: float) -> Dict:
+    """Decimals printed in the totals box under the table (taxable value, non-taxable value, VAT, grand)."""
+    if not rows:
+        return {}
+    y_last = max(y for _, y in rows)
+    vals = sorted({round(float(t.text), 3) for t in toks
+                   if y_last + 60 * s < t.cy < y_last + 520 * s and t.conf >= 70
+                   and re.fullmatch(r"\d{1,6}\.\d{2,3}", t.text)})
+    return {"printed_values": vals}
 
 
 def _near_int(q: float) -> Optional[int]:
@@ -174,6 +198,10 @@ def _validate(ln: PoLine) -> None:
         cands.append(("tax", round(tax / TAX, 3)))
     if ln.public and ln.disc_pct is not None and ln.disc_pct < 100:
         cands.append(("public", round(ln.public * (1 - ln.disc_pct / 100) / ((1 + TAX) if tax > 0 else 1.0), 3)))
+    for label, v in list(cands):
+        if v >= 400:  # '225.0' + '0' sometimes becomes 2250.0
+            cands.append((label + "/10", round(v / 10, 3)))
+            cands.append((label + "/100", round(v / 100, 3)))
     chosen = None
     for label, v in cands:
         if ln.total and v > 0:

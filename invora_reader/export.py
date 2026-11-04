@@ -33,13 +33,15 @@ def _unit_net(l: Dict):
 def rows_for_invoice(inv: Dict) -> List[Dict]:
     out = []
     t = inv["template"]
+    check = printed_total_check(inv)
     for n, r in enumerate(inv.get("rows", []), start=1):
         l, c = r["line"], r["cands"]
         gap = (c[0]["score"] - (c[1]["score"] if len(c) > 1 else 0.0)) if c else None
         vat_rate = 0.14 if (l.get("vat") or l.get("tax_unit") or 0) > 0 else 0.0
         sysl = r["system"]["line"] if r.get("system") else None
         out.append({
-            "status": status_for(t, l, c, r.get("learned")),
+            "status": "review" if check == "mismatch" else status_for(t, l, c, r.get("learned")),
+            "invoice_check": check,
             "template": t,
             "layout": "B" if (t == "ibn" and "margin" in l) else "",
             "supplier_item_code": l.get("code_sup") or "",
@@ -64,10 +66,40 @@ def rows_for_invoice(inv: Dict) -> List[Dict]:
             "alt_3": f'{c[2]["code"]} {c[2]["name"]}' if len(c) > 2 else "",
             "name_on_scan": l.get("name_ar", ""),
             "learned_code": (r.get("learned") or {}).get("code", ""),
-            "flags": "; ".join(l.get("flags", [])),
+            "flags": "; ".join(l.get("flags", []) + (["invoice printed totals do not match the lines"] if check == "mismatch" else [])),
             "softec_doc": (inv.get("system_candidates") or [{}])[0].get("doc", ""),
             "softec_code": sysl["code"] if sysl else "",
             "softec_unit_price": sysl["price"] if sysl else "",
             "code_agrees_with_softec": (c[0]["code"] == sysl["code"]) if (c and sysl) else "",
         })
     return out
+
+
+def is_noise(row: Dict) -> bool:
+    """A row with no quantity and no usable price pair is a false row anchor (handwriting, stamps, totals box)."""
+    if row.get("qty"):
+        return False
+    try:
+        price = float(row.get("unit_price_net") or 0)
+    except (TypeError, ValueError):
+        price = 0.0
+    return price <= 0 or not row.get("public_price")
+
+
+def printed_total_check(inv: Dict) -> str:
+    """PharmaOverseas: sum of line values must equal the printed taxable / non-taxable values.
+
+    'ok' | 'mismatch' | 'unknown' (printed values not read). A mismatch means a line is missing or wrong.
+    """
+    if inv["template"] != "po":
+        return "unknown"
+    vals = inv.get("totals", {}).get("printed_values") or []
+    lines = [l for l in inv["lines"] if l.get("ok") and l.get("total")]
+    if not vals or not lines:
+        return "unknown"
+    nontax = round(sum(l["total"] for l in lines if not (l.get("tax_unit") or 0) > 0), 2)
+    taxable_pre = round(sum(l["total"] - (l.get("tax_total") or l["total"] - l["total"] / 1.14)
+                            for l in lines if (l.get("tax_unit") or 0) > 0), 2)
+    def seen(x):
+        return x == 0 or any(abs(v - x) <= max(0.06, 0.0004 * x) for v in vals)
+    return "ok" if seen(nontax) and seen(taxable_pre) else "mismatch"

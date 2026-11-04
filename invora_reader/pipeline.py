@@ -146,6 +146,8 @@ def group_invoices(pages: List[Dict]) -> List[Dict]:
         inv["lines"].extend(pg["lines"])
         inv["warnings"].extend(f"p{pg['page']}: {w}" for w in pg.get("warnings", []))
         if pg["totals"]:
-            inv["totals"] = pg["totals"]
+            last = h["pages"] is None or h["page"] is None or h["page"] == h["pages"]
+            if last or not inv["totals"]:
+                inv["totals"] = pg["totals"]
         inv["date"] = inv["date"] or h["date"]
     return invs

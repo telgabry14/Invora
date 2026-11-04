@@ -70,7 +70,47 @@ def main(argv=None) -> int:
                 "top1_matches_system": (c[0]["code"] == sysl["code"]) if (c and sysl) else None,
                 "flags": "; ".join(l.get("flags", [])),
             })
-    upload = [row for inv in invoices for row in export.rows_for_invoice(inv)]
+    every = [row for inv in invoices for row in export.rows_for_invoice(inv)]
+    upload = [r for r in every if not export.is_noise(r)]
+    rejected = [r for r in every if export.is_noise(r)]
+    if rejected:
+        with open(os.path.join(a.out, "rejected_rows.csv"), "w", encoding="utf-8-sig", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=list(rejected[0]))
+            w.writeheader()
+            w.writerows(rejected)
+    summary = []
+    for inv in invoices:
+        rows = [r for r in export.rows_for_invoice(inv) if not export.is_noise(r)]
+        if not rows:
+            continue
+        sysc = (inv.get("system_candidates") or [{}])[0]
+        scan_total = link.scan_amount(inv)
+        summary.append({
+            "supplier": export.FAMILY_NAME.get(inv["template"], inv["template"]), "invoice_key": inv["key"],
+            "scan_date": inv["date"], "file": inv["file"], "pages": ",".join(map(str, inv["pages"])),
+            "invoice_check": export.printed_total_check(inv),
+            "lines": len(rows), "auto": sum(r["status"] == "auto" for r in rows),
+            "review": sum(r["status"] != "auto" for r in rows),
+            "ready": all(r["status"] == "auto" for r in rows),
+            "scan_total": scan_total, "softec_doc": sysc.get("doc", ""), "softec_amount": sysc.get("amount", ""),
+            "total_diff": round(scan_total - sysc["amount"], 2) if (scan_total and sysc.get("amount")) else "",
+        })
+    if summary:
+        with open(os.path.join(a.out, "invoices_summary.csv"), "w", encoding="utf-8-sig", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=list(summary[0]))
+            w.writeheader()
+            w.writerows(summary)
+        print(f"{sum(1 for x in summary if x['ready'])} of {len(summary)} invoices fully auto (ready)")
+    empty = [i for i in invoices if not i["lines"]]
+    if empty:
+        with open(os.path.join(a.out, "invoices_without_lines.csv"), "w", encoding="utf-8-sig", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["file", "pages", "template", "scan_date", "warnings"])
+            for i in empty:
+                w.writerow([i["file"], ",".join(map(str, i["pages"])), i["template"], i["date"], "; ".join(i["warnings"])])
+        print(f"{len(empty)} invoices without readable lines -> invoices_without_lines.csv")
+    if rejected:
+        print(f"{len(rejected)} noise rows moved to rejected_rows.csv")
     if upload:
         with open(os.path.join(a.out, "upload.csv"), "w", encoding="utf-8-sig", newline="") as f:
             w = csv.DictWriter(f, fieldnames=list(upload[0]))
