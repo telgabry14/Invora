@@ -7,7 +7,7 @@ import json
 import os
 import sys
 
-from . import export, learned, link, pipeline, system_export
+from . import export, harvest, learned, link, pipeline, system_export
 from .match import Master
 
 
@@ -25,7 +25,24 @@ def main(argv=None) -> int:
     L = sub.add_parser("learn", help="remember the item codes confirmed in a reviewed upload.csv")
     L.add_argument("reviewed_csv")
     L.add_argument("--store", default="learned.json")
+    H = sub.add_parser("harvest", help="draft Arabic names for the master from scans linked to Softec")
+    H.add_argument("invoices_json", help="out/invoices.json from a 'read --system' run")
+    H.add_argument("--master", required=True)
+    H.add_argument("--system", nargs="+", required=True)
+    H.add_argument("--out", default="arabic_names.csv")
     a = ap.parse_args(argv)
+    if a.cmd == "harvest":
+        import json
+        master = Master.from_xlsx(a.master)
+        by_doc = {s["doc"]: s for f in a.system for s in system_export.parse(f)}
+        names = harvest.harvest(json.load(open(a.invoices_json, encoding="utf-8")), by_doc)
+        rows = harvest.to_rows(names, master)
+        with open(a.out, "w", encoding="utf-8-sig", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=["الكود", "الصنف", "الاسم العربي", "أسماء بديلة", "مرات الظهور"])
+            w.writeheader()
+            w.writerows(rows)
+        print(f"{len(rows)} items with an Arabic name -> {a.out}")
+        return 0
     if a.cmd == "learn":
         store = learned.load(a.store)
         n = learned.learn_csv(store, a.reviewed_csv)

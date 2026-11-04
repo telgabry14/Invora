@@ -69,3 +69,12 @@ def numbers(text: str):
     """Numeric tokens normalised ('2000', '14', '0.1'); Arabic-Indic digits converted."""
     text = (text or "").translate(str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789"))
     return {m.group(0).lstrip("0") or "0" for m in re.finditer(r"\d+(?:\.\d+)?", text)}
+
+
+def arabic_norm(text: str) -> str:
+    """Arabic letters only, spelling variants collapsed (alef/ya/ta-marbuta), for Arabic-to-Arabic comparison."""
+    if not re.search(r"[\u0600-\u06FF]", text or ""):
+        return ""
+    t = _DIAC.sub("", text or "")
+    t = re.sub("[إأآا]", "ا", t).replace("ى", "ي").replace("ة", "ه").replace("ؤ", "و").replace("ئ", "ي")
+    return " ".join(re.findall(r"[\u0621-\u064A]+|\d+", t))

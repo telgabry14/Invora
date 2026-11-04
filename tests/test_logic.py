@@ -97,3 +97,22 @@ def test_printed_total_check_detects_missing_line():
     assert export.printed_total_check(inv) == "ok"          # 177.6 + 2516.4 = 2694.0 ; 799.16 - 98.16 = 701.0
     inv["lines"] = lines[:2]                                  # a line got lost
     assert export.printed_total_check(inv) == "mismatch"
+
+
+def test_arabic_name_column_disambiguates_similar_brands(tmp_path):
+    import openpyxl
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["الكود", "الصنف", "السعر", "الاسم العربي", "أسماء بديلة"])
+    ws.append([1, "LIMITLESS MAN MULTIGUMMIES 90 GUMMIES", 345, "ليمتلس مان مالتي جاميز 90 قطعه", None])
+    ws.append([2, "LIMITLESS WOMAN MULTIGUMMIES 90 GUMMIES", 345, "ليمتلس وومان مالتي جاميز 90 قطعه", None])
+    ws.append([3, "BIOTIN 10MG 30CAP (GLOBAL)", 250, None, "هير اند نيلز 10 مجم; HAIR AND NAILS 10MG"])
+    path = tmp_path / "master.xlsx"
+    wb.save(path)
+    m = Master.from_xlsx(str(path))
+    assert m.match("ليمتلس وومان مالتى جاميز 90 قطعه", 345)[0].code == "2"
+    assert m.match("ليمتلس مان مالتى جاميز 90 قطعه", 345)[0].code == "1"
+    # a supplier's alias maps straight to the Softec item
+    assert m.match("هير اند نيلز 10 مجم", 250)[0].code == "3"
+    assert m.match("HAIR AND NAILS 10MG 30 TABLETS", 256)[0].code == "3"
+    assert len({c.code for c in m.match("ليمتلس مان مالتى جاميز 90", 345, k=5)}) == len(m.match("ليمتلس مان مالتى جاميز 90", 345, k=5))

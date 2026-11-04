@@ -1,12 +1,13 @@
 """Match an invoice line (Arabic name + optional public price) to the Softec item master."""
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import List, Optional
 
 from rapidfuzz import fuzz, process
 
-from .translit import numbers, skeleton_words
+from .translit import arabic_norm, numbers, skeleton_words
 
 
 @dataclass
@@ -20,27 +21,71 @@ class Candidate:
 
 class Master:
     def __init__(self, rows):
-        """rows: iterable of (code, name, price)."""
-        self.code, self.name, self.price, self.sk, self.nums, self.joined = [], [], [], [], [], []
-        for code, name, price in rows:
+        """rows: iterable of (code, name, price) or (code, name, price, [extra names]).
+
+        Extra names (Arabic name, supplier aliases) are indexed as additional rows of the same
+        code, so an Arabic scan name is compared Arabic-to-Arabic as well as phonetically.
+        """
+        self.code, self.name, self.price, self.sk, self.nums, self.joined, self.arn = [], [], [], [], [], [], []
+        self.by_code = {}
+        self.ar_rows = {}
+        for row in rows:
+            code, name, price = row[0], row[1], row[2]
+            extras = list(row[3]) if len(row) > 3 and row[3] else []
             if code is None or not name:
                 continue
-            self.code.append(str(code))
-            self.name.append(str(name))
-            self.price.append(float(price) if price not in (None, "") else None)
-            sw = skeleton_words(str(name))
-            self.sk.append(" ".join(sw))
-            self.joined.append("".join(sw))
-            self.nums.append(numbers(str(name)))
-        self.by_code = {c: i for i, c in enumerate(self.code)}
+            price = float(price) if price not in (None, "") else None
+            first = True
+            for nm in [name] + extras:
+                if not nm:
+                    continue
+                self._add(str(code), str(nm), price)
+                if first:
+                    self.by_code[str(code)] = len(self.code) - 1
+                    first = False
+
+    def _add(self, code: str, name: str, price) -> None:
+        self.code.append(code)
+        self.name.append(name)
+        self.price.append(price)
+        sw = skeleton_words(name)
+        self.sk.append(" ".join(sw))
+        self.joined.append("".join(sw))
+        self.nums.append(numbers(name))
+        self.arn.append(arabic_norm(name))
+        self.has_arabic = getattr(self, "has_arabic", False) or bool(self.arn[-1])
+        if self.arn[-1]:
+            self.ar_rows.setdefault(code, []).append(len(self.code) - 1)
 
     @classmethod
     def from_xlsx(cls, path: str, sheet: str = "Sheet1") -> "Master":
+        """Columns by header: code (الكود), name (الصنف), price (السعر); optional Arabic name
+        (الاسم العربي / اسم عربي / arabic_name) and aliases (أسماء بديلة / aliases, split on ; | ،)."""
         import openpyxl
         wb = openpyxl.load_workbook(path, read_only=True)
-        ws = wb[sheet]
-        rows = ((r[0], r[1], r[2]) for r in ws.iter_rows(min_row=2, values_only=True))
-        return cls(rows)
+        ws = wb[sheet] if sheet in wb.sheetnames else wb.worksheets[0]
+        it = ws.iter_rows(values_only=True)
+        head = [str(h or "").strip() for h in next(it)]
+
+        def col(*names, default=None):
+            for n in names:
+                if n in head:
+                    return head.index(n)
+            return default
+
+        ic, inm, ip = col("الكود", "code", default=0), col("الصنف", "name", default=1), col("السعر", "price", default=2)
+        iar = col("الاسم العربي", "اسم عربي", "arabic_name", "الاسم بالعربي")
+        ial = col("أسماء بديلة", "اسم بديل", "aliases", "الأسماء البديلة")
+
+        def rows():
+            for r in it:
+                extras = []
+                if iar is not None and iar < len(r) and r[iar]:
+                    extras.append(str(r[iar]))
+                if ial is not None and ial < len(r) and r[ial]:
+                    extras += [x.strip() for x in re.split(r"[;|،]", str(r[ial])) if x.strip()]
+                yield (r[ic], r[inm], r[ip], extras)
+        return cls(rows())
 
     def __len__(self):
         return len(self.code)
@@ -50,10 +95,16 @@ class Master:
         q_sk = " ".join(skeleton_words(name_ar))
         q_nums = numbers(name_ar)
         q_join = q_sk.replace(" ", "")
+        q_ar = arabic_norm(name_ar)
         if not q_sk and not boost:
             return []
         pool = process.extract(q_sk, self.sk, scorer=fuzz.token_set_ratio, limit=150) if q_sk else []
         idx = {i for _, _, i in pool}
+        if q_ar and self.has_arabic:  # Arabic master names / aliases: compare Arabic to Arabic
+            for _, sc, i in process.extract(q_ar, self.arn, scorer=fuzz.token_set_ratio, limit=60):
+                if sc >= 60 and i not in idx:
+                    pool.append((None, 0.0, i))
+                    idx.add(i)
         if public_price:  # also rank inside the price window so cheap/common names are not crowded out
             win = [i for i, mp in enumerate(self.price)
                    if mp and abs(mp - public_price) / public_price <= price_tol]
@@ -71,6 +122,10 @@ class Master:
                     idx.add(i)
         out: List[Candidate] = []
         for _, name_score, i in pool:
+            if q_ar and self.code[i] in self.ar_rows:
+                # the item has an Arabic name/alias: Arabic-to-Arabic (strict) decides, phonetics only supports
+                ar = max(fuzz.token_sort_ratio(q_ar, self.arn[j]) for j in self.ar_rows[self.code[i]])
+                name_score = 0.3 * name_score + 0.7 * ar
             n_score = self._num_score(q_nums, self.nums[i])
             p_score = self._price_score(public_price, self.price[i], price_tol)
             brand = self._brand(q_sk, self.sk[i])
@@ -86,7 +141,12 @@ class Master:
                                  {"name": round(name_score), "brand": round(brand),
                                   "nums": round(n_score, 2), "price": round(p_score, 2)}))
         out.sort(key=lambda c: -c.score)
-        return out[:k]
+        seen, best = set(), []
+        for c in out:            # one result per item code (an item can have several indexed names)
+            if c.code not in seen:
+                seen.add(c.code)
+                best.append(c)
+        return best[:k]
 
     @staticmethod
     def _brand(q: str, m: str) -> float:
