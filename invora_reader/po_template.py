@@ -68,7 +68,7 @@ def _num(tokens: List[Tok]) -> Optional[float]:
 
 # Calibration (px at reference scale s=1: digit height ~19.5px, i.e. 300dpi / 515pt page),
 # relative to the discount-% column centre. Positive = further right (towards the item name).
-OFF = {"qty": 565, "batch": 374, "expiry": 280, "public": 175, "tax_unit": 90, "pharm": -74,
+OFF = {"qty": 565, "batch": 374, "expiry": 274, "public": 175, "tax_unit": 85, "pharm": -74,
        "total": -184, "tax_total": -298, "margin_pharm": -407, "margin_dist": -476}
 HALF_W = {"public": 52, "tax_unit": 44, "pharm": 50, "total": 58, "tax_total": 54, "qty": 36, "batch": 50,
           "expiry": 48, "margin_pharm": 34, "margin_dist": 34}
@@ -114,6 +114,13 @@ def _anchors(toks: List[Tok], W: int) -> List[Tok]:
         if out and abs(t.cy - out[-1].cy) < 25:
             continue
         out.append(t)
+    # rows whose discount number was not read still show their 'dd.ddd' VAT cell on the same line
+    off = OFF["tax_unit"]
+    for u in toks:
+        if TAXTOK.match(u.text) and u.conf >= 50 and abs(u.cx - off - (a * u.cy + b)) <= 12 \
+                and all(abs(u.cy - o.cy) >= 25 for o in out):
+            out.append(Tok(int(u.x - off), u.y, u.w, u.h, "", 0.0))
+    out.sort(key=lambda t: t.cy)
     return out
 
 
@@ -138,7 +145,8 @@ def read_page(clean: np.ndarray) -> Dict:
     anchors = _anchors(toks, W)
     if not anchors:
         return {"lines": [], "scale": None, "warnings": ["no row anchors (discount column) found"]}
-    s = float(np.median([t.h for t in anchors])) / DIGIT_H
+    s = 1.0   # columns sit at fixed px offsets at 300 dpi on every page (measured: expiry +273.5, VAT +84.5);
+    #           digit height is NOT a scale (merged OCR tokens inflate it), so it must not move the columns.
     rows = _fill_gaps(anchors, s)
     warn: List[str] = []
     lines: List[PoLine] = []
@@ -147,7 +155,8 @@ def read_page(clean: np.ndarray) -> Dict:
         hw = HALF_W[name] * s
         xc = cx + OFF[name] * s
         x0, x1 = int(max(xc - hw, 0)), int(min(xc + hw, W))
-        y0, y1 = int(max(yc - BAND_UP * s, 0)), int(min(yc + BAND_DOWN * s, H))
+        down = 37.0 if name == "batch" else BAND_DOWN   # batch numbers wrap onto a second line
+        y0, y1 = int(max(yc - BAND_UP * s, 0)), int(min(yc + down * s, H))
         return clean[y0:y1, x0:x1]
 
     for cx, yc in rows:
@@ -161,8 +170,8 @@ def read_page(clean: np.ndarray) -> Dict:
         ln.margin_dist = _read(crop("margin_dist", cx, yc), _margin)
         ln.qty_ocr = _read(crop("qty", cx, yc), _qty_cell)
         ln.expiry = _read(crop("expiry", cx, yc), _expiry) or ""
-        ln.batch = cell_alnum(crop("batch", cx, yc))
-        d = [t for t in anchors if abs(t.cy - yc) < 12 * s]
+        ln.batch = _clean_batch(cell_alnum(crop("batch", cx, yc)))
+        d = [t for t in anchors if abs(t.cy - yc) < 12 * s and t.text]
         if d:
             ln.disc_pct = float(d[0].text)
         else:  # anchor was inferred by gap-filling: read the discount cell directly
@@ -205,6 +214,12 @@ def _printed_values(clean: np.ndarray, rows: List[tuple], s: float) -> Dict:
                    for m in re.findall(r"\d{1,3}(?:,\d{3})+\.\d{2,3}|\d+\.\d{2,3}", txt)})
     ints = sorted({int(m) for m in re.findall(r"(?<![\d.,])\d{1,5}(?![\d.,])", txt)})
     return {"printed_values": vals, "printed_ints": ints}
+
+
+def _clean_batch(b: str) -> str:
+    """Drop letters trailing a long digit run ('26060SS': text of the next line leaking into the crop)."""
+    m = re.match(r"^(\d{5,})[A-Z]{1,4}$", b or "")
+    return m.group(1) if m else (b or "")
 
 
 def _read(img: np.ndarray, parse, psms=(6, 7, 11)):

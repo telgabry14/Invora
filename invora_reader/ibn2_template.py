@@ -92,7 +92,7 @@ def read_page(clean: np.ndarray) -> Dict:
     anchors = _anchors(toks, W, H)
     if not anchors:
         return {"lines": [], "scale": None, "totals": {}, "warnings": ["no row anchors (supplier code column)"]}
-    s = float(np.median([t.h for t in anchors])) / DIGIT_H
+    s = 1.0  # fixed px layout at 300 dpi (digit height is not a scale)
     lines: List[Ibn2Line] = []
 
     def box(cx, yc, key):
