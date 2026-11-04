@@ -32,7 +32,6 @@ def main(argv=None) -> int:
     H.add_argument("--out", default="arabic_names.csv")
     a = ap.parse_args(argv)
     if a.cmd == "harvest":
-        import json
         master = Master.from_xlsx(a.master)
         by_doc = {s["doc"]: s for f in a.system for s in system_export.parse(f)}
         names = harvest.harvest(json.load(open(a.invoices_json, encoding="utf-8")), by_doc)
@@ -108,7 +107,7 @@ def main(argv=None) -> int:
             "invoice_check": export.printed_total_check(inv),
             "lines": len(rows), "auto": sum(r["status"] == "auto" for r in rows),
             "review": sum(r["status"] != "auto" for r in rows),
-            "ready": all(r["status"] == "auto" for r in rows),
+            "ready": all(r["status"] == "auto" for r in rows) and (inv["template"] != "po" or export.printed_total_check(inv) == "ok"),
             "scan_total": scan_total, "softec_doc": sysc.get("doc", ""), "softec_amount": sysc.get("amount", ""),
             "total_diff": round(scan_total - sysc["amount"], 2) if (scan_total and sysc.get("amount")) else "",
         })

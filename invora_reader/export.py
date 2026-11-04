@@ -87,19 +87,35 @@ def is_noise(row: Dict) -> bool:
 
 
 def printed_total_check(inv: Dict) -> str:
-    """PharmaOverseas: sum of line values must equal the printed taxable / non-taxable values.
+    """PharmaOverseas: do the lines add up to what is printed on the invoice?
 
-    'ok' | 'mismatch' | 'unknown' (printed values not read). A mismatch means a line is missing or wrong.
+    'ok'         both section values (taxable pre-VAT / non-taxable) are printed and match, or the printed
+                 grand total equals the lines plus a printed fixed margin
+    'mismatch'   the grand total was read and the lines do not explain it (a line is missing or wrong)
+    'unknown'    not enough was read to decide
     """
     if inv["template"] != "po":
         return "unknown"
-    vals = inv.get("totals", {}).get("printed_values") or []
+    t = inv.get("totals", {})
+    vals = t.get("printed_values") or []
+    ints = t.get("printed_ints") or []
     lines = [l for l in inv["lines"] if l.get("ok") and l.get("total")]
     if not vals or not lines:
         return "unknown"
-    nontax = round(sum(l["total"] for l in lines if not (l.get("tax_unit") or 0) > 0), 2)
-    taxable_pre = round(sum(l["total"] - (l.get("tax_total") or l["total"] - l["total"] / 1.14)
-                            for l in lines if (l.get("tax_unit") or 0) > 0), 2)
+
     def seen(x):
         return x == 0 or any(abs(v - x) <= max(0.06, 0.0004 * x) for v in vals)
-    return "ok" if seen(nontax) and seen(taxable_pre) else "mismatch"
+
+    taxed = [l for l in lines if (l.get("tax_unit") or 0) > 0]
+    nontax = round(sum(l["total"] for l in lines if not (l.get("tax_unit") or 0) > 0), 2)
+    taxable_pre = round(sum(l["total"] - (l.get("tax_total") or l["total"] - l["total"] / 1.14) for l in taxed), 2)
+    if seen(nontax) and seen(taxable_pre) and (nontax or taxable_pre):
+        return "ok"
+    total = round(sum(l["total"] for l in lines), 2)
+    big = max(vals)
+    if big >= 0.5 * total:                       # the grand total was read
+        gap = round(big - total, 2)
+        if abs(gap) <= 0.6 or any(abs(gap - m) <= 0.6 for m in ints) or any(abs(gap - 2 * m) <= 0.6 for m in ints):
+            return "ok"
+        return "mismatch"
+    return "unknown"

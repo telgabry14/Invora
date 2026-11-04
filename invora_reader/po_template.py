@@ -162,18 +162,29 @@ def read_page(clean: np.ndarray) -> Dict:
             warn.append(f"dropped {len(dropped)} inconsistent row(s) (likely totals-box tokens)")
         lines = [l for l in lines if l.ok]
     return {"lines": [l.to_dict() for l in lines], "scale": round(s, 3), "warnings": warn,
-            "totals": _printed_values(toks, rows, s)}
+            "totals": _printed_values(clean, rows, s)}
 
 
-def _printed_values(toks: List[Tok], rows: List[tuple], s: float) -> Dict:
-    """Decimals printed in the totals box under the table (taxable value, non-taxable value, VAT, grand)."""
+def _printed_values(clean: np.ndarray, rows: List[tuple], s: float) -> Dict:
+    """Numbers printed in the totals box under the table (taxable / non-taxable value, VAT, grand).
+
+    The box uses thousands separators ('3,674.600'), so it is read with its own digit+comma OCR.
+    """
     if not rows:
         return {}
+    import pytesseract
+    H, W = clean.shape
     y_last = max(y for _, y in rows)
-    vals = sorted({round(float(t.text), 3) for t in toks
-                   if y_last + 60 * s < t.cy < y_last + 520 * s and t.conf >= 70
-                   and re.fullmatch(r"\d{1,6}\.\d{2,3}", t.text)})
-    return {"printed_values": vals}
+    y0, y1 = int(y_last + 60 * s), int(min(H, y_last + 560 * s))
+    if y1 <= y0:
+        return {}
+    crop = clean[y0:y1, int(0.10 * W):int(0.98 * W)]
+    txt = pytesseract.image_to_string(crop, lang="eng",
+                                      config="--psm 11 -c tessedit_char_whitelist=0123456789.,")
+    vals = sorted({round(float(m.replace(",", "")), 3)
+                   for m in re.findall(r"\d{1,3}(?:,\d{3})+\.\d{2,3}|\d+\.\d{2,3}", txt)})
+    ints = sorted({int(m) for m in re.findall(r"(?<![\d.,])\d{1,5}(?![\d.,])", txt)})
+    return {"printed_values": vals, "printed_ints": ints}
 
 
 def _near_int(q: float) -> Optional[int]:
