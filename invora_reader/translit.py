@@ -53,14 +53,14 @@ STOP = {"mg", "mgm", "mg", "mls", "ml", "gm", "grm", "krs", "tb", "tbs", "tbls",
         "ks", "sh", "ml", "mmg"}
 
 
-def skeleton_words(text: str, drop_stop: bool = True):
+def skeleton_words(text: str, drop_stop: bool = True, min_len: int = 2):
     """List of phonetic skeletons for the alphabetic words of ``text`` (len>=2)."""
     res = []
     for kind, t in tokens(text):
         if kind != "w":
             continue
         sk = _ar(t) if "؀" <= t[0] <= "ۿ" else _lat(t)
-        if len(sk) >= 2 and not (drop_stop and sk in STOP):
+        if len(sk) >= min_len and not (drop_stop and sk in STOP):
             res.append(sk)
     return res
 

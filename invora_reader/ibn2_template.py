@@ -88,8 +88,10 @@ def read_page(clean: np.ndarray) -> Dict:
         y0, y1 = int(max(yc - BAND_UP * s, 0)), int(min(yc + BAND_DOWN * s, H))
         return clean[y0:y1, int(max(xc - hw, 0)):int(min(xc + hw, W))]
 
-    for a in anchors:
+    for idx, a in enumerate(anchors):
         cx, yc = a.cx, a.cy
+        prev_y = anchors[idx - 1].cy if idx > 0 else None
+        next_y = anchors[idx + 1].cy if idx + 1 < len(anchors) else None
         ln = Ibn2Line(y=int(yc), code_sup=a.text)
 
         def val(key, psm=7):
@@ -121,13 +123,19 @@ def read_page(clean: np.ndarray) -> Dict:
             ln.tot_qty = val("tot_qty")
         _validate(ln)
         x0 = int(cx + NAME_X[0] * s)
-        y0, y1 = int(max(yc - NAME_UP * s, 0)), int(min(yc + NAME_DOWN * s, H))
+        top = yc - NAME_UP * s
+        bot = yc + NAME_DOWN * s
+        if prev_y is not None:   # never read into the neighbouring row's name
+            top = max(top, (prev_y + yc) / 2 - 8 * s)
+        if next_y is not None:
+            bot = min(bot, (yc + next_y) / 2 - 8 * s)
+        y0, y1 = int(max(top, 0)), int(min(bot, H))
         import pytesseract
         t = pytesseract.image_to_string(clean[y0:y1, x0:min(W, int(cx + NAME_X[1] * s))], lang="eng", config="--psm 6")
         ln.name_en = ln.name_ar = " ".join(t.split())
         lines.append(ln)
     warn = [f"{sum(1 for l in lines if not l.ok)} row(s) need review"] if any(not l.ok for l in lines) else []
-    totals = _totals(toks, lines)
+    totals = _totals(toks, anchors, s)
     return {"lines": [l.to_dict() for l in lines], "scale": round(s, 3), "totals": totals, "warnings": warn}
 
 
@@ -170,5 +178,19 @@ def _validate(ln: Ibn2Line) -> None:
             ln.public = derived
 
 
-def _totals(toks: List[Tok], lines: List[Ibn2Line]) -> Dict:
-    return {}
+def _totals(toks: List[Tok], anchors: List[Tok], s: float) -> Dict:
+    """Totals row under the table: net invoice total is the left-most decimal, price sum the right-most."""
+    if not anchors:
+        return {}
+    y_last = max(a.cy for a in anchors)
+    below = [t for t in toks if t.cy > y_last + 150 * s and t.conf >= 80 and re.fullmatch(r"\d+\.\d{1,2}", t.text)]
+    if not below:
+        return {}
+    # the totals row is the first text row below the table
+    y0 = min(t.cy for t in below)
+    row = [t for t in below if abs(t.cy - y0) <= 25 * s]
+    if len(row) < 2:
+        return {}
+    row.sort(key=lambda t: t.cx)
+    grand, price_sum = float(row[0].text), float(row[-1].text)
+    return {"grand": grand, "price_sum": price_sum, "values_left_to_right": [t.text for t in row]}

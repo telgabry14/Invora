@@ -1,21 +1,25 @@
 """Build the upload table: one row per invoice line, split into 'auto' and 'review'.
 
 Thresholds were measured on the sample against Softec entries (leave-one-out):
-  PharmaOverseas  score>=90 and gap>=10  -> 79% of lines, 96.8% correct
-  ibnsina         no threshold reached a safe precision yet -> every line is 'review'
+  PharmaOverseas  score>=90 and gap>=15  -> 71% of lines, 97.7% correct (668 measured lines)
+  ibnsina layout B score>=95 and gap>=15 -> ~41% of lines, 11/11 correct (only 27 measured lines: weak evidence)
+  ibnsina layout A -> always review
+  a learned alias confirmed >= 2 times -> auto
 """
 from __future__ import annotations
 
 from typing import Dict, List
 
 FAMILY_NAME = {"po": "PharmaOverseas", "ibn": "ابن سينا"}
-AUTO_RULE = {"po": (90.0, 10.0)}      # template -> (min score, min gap to 2nd candidate)
+AUTO_RULE = {"po": (90.0, 15.0), "ibn_b": (95.0, 15.0)}   # (min score, min gap to 2nd candidate)
 
 
-def status_for(template: str, line: Dict, cands: List[Dict]) -> str:
+def status_for(template: str, line: Dict, cands: List[Dict], learned: Dict = None) -> str:
     if not cands or not line.get("ok") or not line.get("qty"):
         return "review"
-    rule = AUTO_RULE.get(template)
+    if learned and cands[0]["code"] == learned["code"] and learned["count"] >= 2:
+        return "auto"          # confirmed twice by a human before
+    rule = AUTO_RULE.get("ibn_b" if (template == "ibn" and "margin" in line) else template)
     if not rule:
         return "review"
     gap = cands[0]["score"] - (cands[1]["score"] if len(cands) > 1 else 0.0)
@@ -35,7 +39,10 @@ def rows_for_invoice(inv: Dict) -> List[Dict]:
         vat_rate = 0.14 if (l.get("vat") or l.get("tax_unit") or 0) > 0 else 0.0
         sysl = r["system"]["line"] if r.get("system") else None
         out.append({
-            "status": status_for(t, l, c),
+            "status": status_for(t, l, c, r.get("learned")),
+            "template": t,
+            "layout": "B" if (t == "ibn" and "margin" in l) else "",
+            "supplier_item_code": l.get("code_sup") or "",
             "supplier": FAMILY_NAME.get(t, t),
             "invoice_key": inv.get("key"),
             "scan_date": inv.get("date"),
@@ -56,6 +63,7 @@ def rows_for_invoice(inv: Dict) -> List[Dict]:
             "alt_2": f'{c[1]["code"]} {c[1]["name"]}' if len(c) > 1 else "",
             "alt_3": f'{c[2]["code"]} {c[2]["name"]}' if len(c) > 2 else "",
             "name_on_scan": l.get("name_ar", ""),
+            "learned_code": (r.get("learned") or {}).get("code", ""),
             "flags": "; ".join(l.get("flags", [])),
             "softec_doc": (inv.get("system_candidates") or [{}])[0].get("doc", ""),
             "softec_code": sysl["code"] if sysl else "",

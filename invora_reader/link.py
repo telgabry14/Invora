@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Dict, List, Optional
 
+from . import learned as learned_mod
 from .match import Master
 
 FAMILY = {"po": "فارما اوفر سيز", "ibn": "ابن سينا"}
@@ -66,7 +67,7 @@ def _eff_price(l: Dict) -> Optional[float]:
 
 def _sig_hits(inv: Dict, s: Dict) -> int:
     """How many scan lines have a system line with the same qty and a price within tolerance."""
-    tol = 0.035 if inv["template"] == "po" else 0.06
+    tol = 0.035 if inv["template"] == "po" else (0.03 if any("margin" in l for l in inv["lines"]) else 0.06)
     used, hits = set(), 0
     for l in inv["lines"]:
         ep = _eff_price(l)
@@ -90,17 +91,20 @@ def link_by_lines(inv: Dict, system: List[Dict], day_before: int = 3, day_after:
     out = []
     if inv["template"] == "ibn" and inv["totals"].get("grand"):
         g = inv["totals"]["grand"]
+        layout_b = any("margin" in l for l in inv["lines"])
+        amt_tol = 0.7 if layout_b else 0.05   # layout B: system rounds each unit price, up to ~0.5 EGP off
         for s in system:
-            if fam not in s["supplier"] or abs(s["amount"] - g) > 0.05:
+            if fam not in s["supplier"] or abs(s["amount"] - g) > amt_tol:
                 continue
             dd = _d(s["date"])
             gap = (dd - d0).days if (dd and d0) else None
             if gap is not None and not (-day_before <= gap <= day_after):
                 continue
             out.append({"doc": s["doc"], "supplier": s["supplier"], "amount": s["amount"], "date": s["date"],
-                        "hits": None, "of": n, "day_gap": gap, "by": "amount"})
+                        "hits": None, "of": n, "day_gap": gap, "by": "amount",
+                        "amount_diff": round(abs(s["amount"] - g), 2)})
         if out:
-            out.sort(key=lambda c: abs(c["day_gap"] or 0))
+            out.sort(key=lambda c: (c["amount_diff"], abs(c["day_gap"] or 0)))
             return out[:3]
     if not n:
         return out
@@ -146,14 +150,17 @@ def prior_boost(history: Dict, fam: Optional[str], price: Optional[float], exclu
 
 
 def line_candidates(inv: Dict, master: Master, k: int = 5, history: Optional[Dict] = None,
-                    exclude_doc: Optional[str] = None) -> List[Dict]:
+                    exclude_doc: Optional[str] = None, learned: Optional[Dict] = None) -> List[Dict]:
     rows = []
     fam = FAMILY.get(inv["template"])
     for i, l in enumerate(inv["lines"]):
         public = l.get("public")
         boost = prior_boost(history, fam, _eff_price(l), exclude_doc) if history else None
-        cands = master.match(l.get("name_ar", ""), public, k=k, boost=boost)
-        rows.append({"idx": i, "line": l, "cands": [c.__dict__ for c in cands]})
+        code, n = learned_mod.lookup(learned or {}, inv["template"], l)
+        cands = master.match(l.get("name_ar", ""), public, k=k, boost=boost,
+                             force={code: 60.0} if code else None)
+        rows.append({"idx": i, "line": l, "cands": [c.__dict__ for c in cands],
+                     "learned": {"code": code, "count": n} if code else None})
     return rows
 
 

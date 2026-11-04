@@ -69,3 +69,20 @@ def test_po_ignores_noise_tax_cell():
     ln = po_template.PoLine(y=0, public=135.0, tax_unit=0.0002, disc_pct=8.26, pharm_price=493.85, total=1238.5)
     po_template._validate(ln)
     assert ln.ok and ln.qty == 10
+
+
+def test_learned_alias_overrides_name_mismatch(tmp_path):
+    from invora_reader import learned, link, export
+    m = Master([("1", "BIOTIN 10MG 30CAP (GLOBAL)", 400), ("2", "VEE FERRO 30 CAP", 230)])
+    inv = {"template": "ibn", "lines": [{"name_ar": "HAIR AND NAILS 60 PIECES", "public": 231.0, "qty": 1,
+                                       "code_sup": "679934", "margin": 0, "ok": True}]}
+    assert link.line_candidates(inv, m)[0]["cands"][0]["code"] == "2"      # unknown alias: wrong guess
+    csv_path = tmp_path / "reviewed.csv"
+    csv_path.write_text("template,layout,supplier_item_code,name_on_scan,item_code\n"
+                        "ibn,B,679934,HAIR AND NAILS 60 PIECES,1\n"
+                        "ibn,B,679934,HAIR AND NAILS 60,1\n", encoding="utf-8")
+    store = {}
+    assert learned.learn_csv(store, str(csv_path)) == 2
+    row = link.line_candidates(inv, m, learned=store)[0]
+    assert row["cands"][0]["code"] == "1" and row["learned"]["count"] == 2
+    assert export.status_for("ibn", inv["lines"][0], row["cands"], row["learned"]) == "auto"

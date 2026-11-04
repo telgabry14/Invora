@@ -7,7 +7,7 @@ import json
 import os
 import sys
 
-from . import export, link, pipeline, system_export
+from . import export, learned, link, pipeline, system_export
 from .match import Master
 
 
@@ -19,9 +19,19 @@ def main(argv=None) -> int:
     r.add_argument("--master", required=True, help="item master .xlsx (Sheet1: code, name, price)")
     r.add_argument("--system", nargs="+", help="Softec purchase export .htm, to link invoices and verify matches")
     r.add_argument("--out", default="out")
+    r.add_argument("--learned", help="alias memory (json) built with the 'learn' command")
     r.add_argument("--dpi", type=int, default=300)
     r.add_argument("--workers", type=int, default=4)
+    L = sub.add_parser("learn", help="remember the item codes confirmed in a reviewed upload.csv")
+    L.add_argument("reviewed_csv")
+    L.add_argument("--store", default="learned.json")
     a = ap.parse_args(argv)
+    if a.cmd == "learn":
+        store = learned.load(a.store)
+        n = learned.learn_csv(store, a.reviewed_csv)
+        learned.save(store, a.store)
+        print(f"learned {n} rows -> {a.store} ({len(store)} aliases)")
+        return 0
 
     os.makedirs(a.out, exist_ok=True)
     master = Master.from_xlsx(a.master)
@@ -33,13 +43,14 @@ def main(argv=None) -> int:
         invoices.extend(pipeline.group_invoices(pages))
 
     out_rows = []
+    memory = learned.load(a.learned)
     history = link.build_history(system) if system else None
     by_doc = {s["doc"]: s for s in system}
     for inv in invoices:
         cands = link.link_by_lines(inv, system) if system else []
         inv["system_candidates"] = cands
         # leave-one-out: the linked entry itself must not help to match its own lines
-        rows = link.line_candidates(inv, master, history=history,
+        rows = link.line_candidates(inv, master, history=history, learned=memory,
                                     exclude_doc=cands[0]["doc"] if cands else None)
         if cands:
             link.assign_to_system(rows, by_doc[cands[0]["doc"]])
