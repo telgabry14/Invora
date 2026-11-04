@@ -1,0 +1,6 @@
+pymupdf>=1.24
+opencv-python-headless>=4.9
+pytesseract>=0.3.10
+numpy>=1.26
+rapidfuzz>=3.6
+openpyxl>=3.1
