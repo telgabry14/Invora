@@ -8,6 +8,7 @@ Thresholds were measured on the sample against Softec entries (leave-one-out):
 """
 from __future__ import annotations
 
+import re
 from typing import Dict, List
 
 FAMILY_NAME = {"po": "PharmaOverseas", "ibn": "ابن سينا"}
@@ -28,6 +29,15 @@ def status_for(template: str, line: Dict, cands: List[Dict], learned: Dict = Non
 
 def _unit_net(l: Dict):
     return l.get("pharm_price") or l.get("price")
+
+
+def _expiry_iso(l: Dict) -> str:
+    e = l.get("expiry") or ""
+    if re.fullmatch(r"\d{2}\.\d{4}", e):          # PharmaOverseas MM.YYYY
+        return f"{e[3:]}-{e[:2]}"
+    if re.fullmatch(r"20\d{6}", e):                 # ibnsina YYYYMMDD
+        return f"{e[:4]}-{e[4:6]}-{e[6:]}"
+    return ""
 
 
 def rows_for_invoice(inv: Dict) -> List[Dict]:
@@ -59,6 +69,15 @@ def rows_for_invoice(inv: Dict) -> List[Dict]:
             "discount_pct": l.get("disc_pct") if l.get("disc_pct") is not None else l.get("sup_pct"),
             "vat_rate": vat_rate,
             "line_total": l.get("total") if l.get("total") is not None else l.get("pretax"),
+            "qty_printed": l.get("qty_ocr") if t == "po" else l.get("tot_qty"),
+            "batch": l.get("batch") or "",
+            "expiry": _expiry_iso(l),
+            "margin_pharm": l.get("margin_pharm") if t == "po" else l.get("margin"),
+            "margin_dist": "" if t == "po" else l.get("margin_dist"),   # PO: overprinted by side text, unreadable
+            "vat_per_unit": l.get("tax_unit") if t == "po" else "",
+            "vat_line": l.get("tax_total") if t == "po" else l.get("vat"),
+            "discount_tag": l.get("disc_tag") or "",
+            "supplier_on_invoice": l.get("maker_ar") or "",
             "public_price": l.get("public"),
             "match_score": c[0]["score"] if c else "",
             "match_gap": round(gap, 1) if gap is not None else "",

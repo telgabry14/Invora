@@ -82,3 +82,17 @@ def cell_lines(img: np.ndarray, psm: int = 6) -> list:
     t = pytesseract.image_to_string(_prep_cell(img), lang="eng",
                                     config=f"--psm {psm} -c tessedit_char_whitelist=0123456789.")
     return [ln.strip() for ln in t.splitlines() if ln.strip()]
+
+
+def cell_alnum(img: np.ndarray, psm: int = 6) -> str:
+    """Batch numbers: capital letters and digits; wrapped lines are concatenated ('26083' + '04')."""
+    t = pytesseract.image_to_string(_prep_cell(img), lang="eng",
+                                    config=f"--psm {psm} -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+    return "".join(t.split())
+
+
+def cell_lines_alnum(img: np.ndarray, psm: int = 6) -> list:
+    """Text per visual line, letters+digits+'-' (e.g. '20-0' / 'Reg', or '20290101' / '3262030')."""
+    t = pytesseract.image_to_string(_prep_cell(img), lang="eng",
+                                    config=f"--psm {psm} -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-")
+    return [ln.strip() for ln in t.splitlines() if ln.strip()]

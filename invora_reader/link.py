@@ -56,8 +56,8 @@ def find_system_invoice(inv: Dict, system: List[Dict], day_before: int = 3, day_
 def _eff_price(l: Dict) -> Optional[float]:
     """Expected system unit price of a scan line (VAT incl.)."""
     if l.get("total") and l.get("qty"):
-        if l.get("margin") is not None and l.get("pharm_price"):   # ibnsina layout B
-            m = l["margin"] if 0 <= (l["margin"] or 0) <= 3 else 0.0   # margin cell is noisy; real values are 0-3 EGP
+        if "margin" in l and l.get("pharm_price"):   # ibnsina layout B
+            m = l["margin"] if (l["margin"] is not None and 0 <= l["margin"] <= 3) else 0.0   # real values are 0-3 EGP
             return l["total"] / l["qty"] + m * (1 + (0.14 if (l.get("vat") or 0) > 0 else 0))
         return l["total"] / l["qty"]
     if l.get("price") and l.get("qty"):  # ibnsina: supplier price; system ~2.5% below gross incl. VAT

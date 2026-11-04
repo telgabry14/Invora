@@ -12,12 +12,12 @@ from typing import Dict, List, Optional
 
 import numpy as np
 
-from .ocr import Tok, numeric_tokens, cell_number, cell_lines, arabic_text
+from .ocr import Tok, numeric_tokens, cell_number, cell_lines, cell_lines_alnum, cell_text, arabic_text
 
 # offsets from the code-cell centre (px at reference scale: digit height 19)
-OFF = {"public": -305, "pharm": -451, "disc": -605, "margin": -745, "vat": -856,
+OFF = {"disc_tag": -628, "batch": -145, "public": -305, "pharm": -451, "disc": -605, "margin": -745, "vat": -856,
        "pretax": -1190, "tot_qty": 163, "qty_b": 228}
-HALF_W = {"public": 50, "pharm": 60, "disc": 46, "margin": 40, "vat": 50, "pretax": 70, "tot_qty": 36, "qty_b": 40}
+HALF_W = {"disc_tag": 52, "batch": 66, "public": 50, "pharm": 60, "disc": 46, "margin": 40, "vat": 50, "pretax": 70, "tot_qty": 36, "qty_b": 40}
 BAND_UP, BAND_DOWN = 32.0, 84.0
 NAME_X = (285, 500)      # item-name column span right of the code, px
 NAME_UP, NAME_DOWN = 58.0, 92.0  # names wrap to 3-4 lines and start above the code row
@@ -38,6 +38,10 @@ class Ibn2Line:
     vat: Optional[float] = None
     pretax: Optional[float] = None
     tot_qty: Optional[float] = None
+    margin_dist: Optional[float] = None
+    batch: str = ""
+    expiry: str = ""                    # as printed, YYYYMMDD
+    disc_tag: str = ""                  # 'Reg' / 'Oth' printed under the discount
     total: Optional[float] = None       # unit-price * qty incl. VAT (what the system line should be)
     name_en: str = ""
     name_ar: str = ""                   # kept for pipeline compatibility (English names live here too)
@@ -61,6 +65,14 @@ def _anchors(toks: List[Tok], W: int, H: int = 0) -> List[Tok]:
     cols.append(cur)
     main = max(cols, key=len)
     return sorted(main, key=lambda t: t.cy)
+
+
+def _margin(txt: str) -> Optional[float]:
+    m = re.match(r"^(\d{1,2})(?:\.(\d))?$", (txt or "").strip("."))
+    if not m:
+        return None
+    v = float(m.group(1) + ("." + m.group(2) if m.group(2) else ""))
+    return v if v <= 5 and abs(v * 2 - round(v * 2)) < 1e-9 else None
 
 
 def _tok_value(toks, cx, yc, s, key) -> Optional[float]:
@@ -100,11 +112,25 @@ def read_page(clean: np.ndarray) -> Dict:
 
         ln.public, ln.pharm_price, ln.vat = val("public"), val("pharm"), val("vat")
         ln.pretax = val("pretax")
-        ml = cell_lines(box(cx, yc, "margin"), psm=6)      # pharmacist margin on line 1, distributor on line 2
-        try:
-            ln.margin = float(ml[0]) if ml else 0.0
-        except ValueError:
-            ln.margin = 0.0
+        # fixed margins: pharmacist on line 1, distributor on line 2. Page-level digit tokens are far
+        # more reliable here than a tiny crop (dotted rules around the cell confuse the crop OCR).
+        mk = sorted([t for t in toks if t.conf >= 60 and abs(t.cx - (cx + OFF["margin"] * s)) <= HALF_W["margin"] * s
+                     and -BAND_UP * s <= t.cy - yc <= BAND_DOWN * s], key=lambda t: t.cy)
+        mv = [_margin(t.text) for t in mk]
+        ml = cell_lines(box(cx, yc, "margin"), psm=6)
+        if len(mv) >= 2 and mv[0] is not None:
+            ln.margin, ln.margin_dist = mv[0], mv[1]
+        else:
+            ln.margin = mv[0] if mv and mv[0] is not None else (_margin(ml[0]) if ml else None)
+            ln.margin_dist = mv[1] if len(mv) > 1 else (_margin(ml[1]) if len(ml) > 1 else None)
+        bl = cell_lines_alnum(box(cx, yc, "batch"))        # expiry (YYYYMMDD) on line 1, batch on line 2
+        for t in bl:
+            if re.fullmatch(r"20\d{6}", t) and not ln.expiry:
+                ln.expiry = t
+            elif not ln.batch and t != ln.expiry:
+                ln.batch = t
+        dl2 = cell_lines_alnum(box(cx, yc, "disc_tag"))
+        ln.disc_tag = next((t for t in dl2 if re.fullmatch(r"[A-Za-z]{2,4}", t)), "")
         dl = cell_lines(box(cx, yc, "disc"), psm=7)
         ln.disc_pct = _tok_value(toks, cx, yc, s, "disc")
         if ln.disc_pct is None and dl:

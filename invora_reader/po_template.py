@@ -13,7 +13,7 @@ from typing import Dict, List, Optional
 
 import numpy as np
 
-from .ocr import Tok, numeric_tokens, arabic_text, cell_number
+from .ocr import Tok, numeric_tokens, arabic_text, cell_number, cell_text, cell_alnum
 
 TAX = 0.14
 ANCHOR = re.compile(r"^\d{1,3}\.\d{3}$")
@@ -31,6 +31,10 @@ class PoLine:
     tax_total: Optional[float] = None
     name_ar: str = ""
     maker_ar: str = ""
+    margin_pharm: Optional[float] = None   # هامش ثابت للصيدلي
+    margin_dist: Optional[float] = None    # هامش ثابت للموزع
+    batch: str = ""                        # التشغيلة
+    expiry: str = ""                       # ت. الصلاحية (MM.YYYY)
     qty: Optional[float] = None
     flags: List[str] = field(default_factory=list)
     ok: bool = False
@@ -64,9 +68,10 @@ def _num(tokens: List[Tok]) -> Optional[float]:
 
 # Calibration (px at reference scale s=1: digit height ~19.5px, i.e. 300dpi / 515pt page),
 # relative to the discount-% column centre. Positive = further right (towards the item name).
-OFF = {"qty": 564, "expiry": 245, "public": 175, "tax_unit": 90, "pharm": -74,
-       "total": -184, "tax_total": -298}
-HALF_W = {"public": 52, "tax_unit": 44, "pharm": 50, "total": 58, "tax_total": 54}
+OFF = {"qty": 565, "batch": 374, "expiry": 280, "public": 175, "tax_unit": 90, "pharm": -74,
+       "total": -184, "tax_total": -298, "margin_pharm": -407, "margin_dist": -476}
+HALF_W = {"public": 52, "tax_unit": 44, "pharm": 50, "total": 58, "tax_total": 54, "qty": 36, "batch": 50,
+          "expiry": 48, "margin_pharm": 34, "margin_dist": 34}
 BAND_UP, BAND_DOWN = 48.0, 26.0   # row band around the discount token centre (px at s=1)
 DIGIT_H = 19.0
 DISC = re.compile(r"^\d{1,2}(\.\d{1,2})?$")
@@ -83,23 +88,33 @@ def _has_tax_cell(t: Tok, toks: List[Tok]) -> bool:
 
 
 def _anchors(toks: List[Tok], W: int) -> List[Tok]:
-    """Discount-% tokens: short clean numbers in one narrow, slightly slanted x column."""
+    """Discount-% cells: short clean numbers lying on one narrow, slightly slanted line.
+
+    A VAT cell next to a candidate is used only to pick the right column (wrapped price fragments
+    can outnumber the discount cells); once the line is known every candidate on it is a row.
+    """
     cand = [t for t in toks if DISC.match(t.text) and t.conf >= 80 and t.w < 0.02 * W + 40 and t.h < 40]
-    withtax = [t for t in cand if _has_tax_cell(t, toks)]
-    cand = withtax or cand
-    if len(cand) < 1:
+    if not cand:
         return []
-    cols = _cluster_x(cand, gap=0.012 * W + 14)
-    main = max(cols, key=len)
+    seeds = [t for t in cand if _has_tax_cell(t, toks)] or cand
+    main = max(_cluster_x(seeds, gap=0.012 * W + 14), key=len)
     pts = sorted(main, key=lambda t: t.cy)
-    if len(pts) >= 4:  # drop outliers from the best-fit slanted line x = a*y + b
+    if len(pts) >= 4:
         keep = pts
         for _ in range(3):
             a, b = np.polyfit([t.cy for t in keep], [t.cx for t in keep], 1)
             res = [abs(t.cx - (a * t.cy + b)) for t in pts]
             keep = [t for t, r in zip(pts, res) if r <= 9] or keep
-        pts = keep
-    return pts
+        a, b = np.polyfit([t.cy for t in keep], [t.cx for t in keep], 1)
+    else:
+        a, b = 0.0, float(np.median([t.cx for t in pts]))
+    on_line = sorted([t for t in cand if abs(t.cx - (a * t.cy + b)) <= 11], key=lambda t: t.cy)
+    out: List[Tok] = []
+    for t in on_line:                       # one anchor per row
+        if out and abs(t.cy - out[-1].cy) < 25:
+            continue
+        out.append(t)
+    return out
 
 
 def _fill_gaps(rows: List[Tok], s: float) -> List[tuple]:
@@ -142,6 +157,11 @@ def read_page(clean: np.ndarray) -> Dict:
         ln.pharm_price = cell_number(crop("pharm", cx, yc))
         ln.total = cell_number(crop("total", cx, yc))
         ln.tax_total = cell_number(crop("tax_total", cx, yc))
+        ln.margin_pharm = _read(crop("margin_pharm", cx, yc), _margin)
+        ln.margin_dist = _read(crop("margin_dist", cx, yc), _margin)
+        ln.qty_ocr = _read(crop("qty", cx, yc), _qty_cell)
+        ln.expiry = _read(crop("expiry", cx, yc), _expiry) or ""
+        ln.batch = cell_alnum(crop("batch", cx, yc))
         d = [t for t in anchors if abs(t.cy - yc) < 12 * s]
         if d:
             ln.disc_pct = float(d[0].text)
@@ -185,6 +205,38 @@ def _printed_values(clean: np.ndarray, rows: List[tuple], s: float) -> Dict:
                    for m in re.findall(r"\d{1,3}(?:,\d{3})+\.\d{2,3}|\d+\.\d{2,3}", txt)})
     ints = sorted({int(m) for m in re.findall(r"(?<![\d.,])\d{1,5}(?![\d.,])", txt)})
     return {"printed_values": vals, "printed_ints": ints}
+
+
+def _read(img: np.ndarray, parse, psms=(6, 7, 11)):
+    """Try several page-segmentation modes; return the first reading that passes ``parse``."""
+    for psm in psms:
+        v = parse(cell_text(img, psm=psm))
+        if v is not None:
+            return v
+    return None
+
+
+def _expiry(txt: str) -> Optional[str]:
+    """MM.YYYY with a sane month/year ('062027' and '06 2027' are accepted, '0.20273' is not)."""
+    digits = re.sub(r"\D", "", txt or "")
+    for m in re.finditer(r"(0[1-9]|1[0-2])(20[2-3]\d)", digits):
+        return f"{m.group(1)}.{m.group(2)}"
+    return None
+
+
+def _margin(txt: str) -> Optional[float]:
+    """Fixed margins are multiples of 0.5 (0, 1, 1.5, 2 ...); '1.53' is '1.5' plus a stray dot-line digit."""
+    t = (txt or "").strip(".")
+    m = re.match(r"^(\d{1,2})(?:\.(\d))?", t)
+    if not m or not t:
+        return None
+    v = float(m.group(1) + ("." + m.group(2) if m.group(2) else ""))
+    return v if v <= 5 and abs(v * 2 - round(v * 2)) < 1e-9 else None
+
+
+def _qty_cell(txt: str) -> Optional[float]:
+    t = re.sub(r"[^\d]", "", txt or "")
+    return float(t) if t and len(t) <= 4 and int(t) >= 1 else None
 
 
 def _near_int(q: float) -> Optional[int]:
