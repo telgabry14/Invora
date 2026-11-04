@@ -154,7 +154,7 @@ def read_page(clean: np.ndarray) -> Dict:
 
 def _near_int(q: float) -> Optional[int]:
     qi = round(q)
-    return qi if qi >= 1 and abs(q - qi) <= max(0.012, 0.004 * qi) else None
+    return qi if 1 <= qi <= 5000 and abs(q - qi) <= max(0.012, 0.004 * qi) else None
 
 
 def _validate(ln: PoLine) -> None:
@@ -164,6 +164,9 @@ def _validate(ln: PoLine) -> None:
     public*(1-disc). total = qty * (unit + tax_unit) must give an integer qty.
     """
     tax = ln.tax_unit or 0.0
+    if tax < 0.05:  # '0.000' is often read as '0.0002'; real VAT per unit is never this small
+        tax = 0.0
+        ln.tax_unit = 0.0
     cands = []  # (label, value)
     if ln.pharm_price:
         cands.append(("ocr", ln.pharm_price))

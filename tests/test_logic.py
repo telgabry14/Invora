@@ -62,3 +62,10 @@ def test_ibn_totals_identity_repairs_dropped_digit():
     toks = [Tok(x, 900, 80, 25, t, 96.0) for t, x in xs]
     out = ibn_template._totals(toks, lines, 1748)
     assert out["ibn_disc"] == 117.72 and out["consistent"]
+
+
+def test_po_ignores_noise_tax_cell():
+    # invoice 7876: '0.000' read as 0.0002 used to give pharm=0.001 and qty=1,032,083
+    ln = po_template.PoLine(y=0, public=135.0, tax_unit=0.0002, disc_pct=8.26, pharm_price=493.85, total=1238.5)
+    po_template._validate(ln)
+    assert ln.ok and ln.qty == 10
