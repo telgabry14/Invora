@@ -15,7 +15,7 @@ from typing import Dict, List, Optional
 
 import numpy as np
 
-from . import ibn_template, po_template
+from . import ibn2_template, ibn_template, po_template
 from .ocr import arabic_text, numeric_tokens
 from .prep import clean_page, render_pages
 
@@ -38,7 +38,13 @@ def header_info(clean: np.ndarray) -> Dict:
     elif "overseas" in low or "مسعر" in text or "page" in low:
         info["template"] = "po"
     if info["template"] == "ibn":
+        iso = next((t for t in nums if _PO_DATE.fullmatch(t)), None) or (
+            _PO_DATE.search(text).group(0) if _PO_DATE.search(text) else None)
+        if iso:
+            info["layout"], info["date"] = "B", iso
         for t in nums:
+            if info["date"]:
+                break
             m = _IBN_DATE.fullmatch(t)
             if m:
                 info["date"] = f"{m.group(3)}-{m.group(2)}-{m.group(1)}"  # printed dd-mm-yyyy
@@ -87,7 +93,7 @@ def read_one_page(args) -> Dict:
         if hdr["template"] == "po":
             r = po_template.read_page(clean)
         elif hdr["template"] == "ibn":
-            r = ibn_template.read_page(clean)
+            r = (ibn2_template if hdr.get("layout") == "B" else ibn_template).read_page(clean)
         else:
             r = {"lines": [], "warnings": ["unknown template (not an invoice page?)"]}
     except Exception as e:  # keep batch running; surface the page for review

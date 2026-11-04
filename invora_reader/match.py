@@ -44,12 +44,12 @@ class Master:
         return len(self.code)
 
     def match(self, name_ar: str, public_price: Optional[float] = None, k: int = 5,
-              price_tol: float = 0.06) -> List[Candidate]:
+              price_tol: float = 0.06, boost=None) -> List[Candidate]:
         q_sk = " ".join(skeleton_words(name_ar))
         q_nums = numbers(name_ar)
-        if not q_sk:
+        if not q_sk and not boost:
             return []
-        pool = process.extract(q_sk, self.sk, scorer=fuzz.token_set_ratio, limit=150)
+        pool = process.extract(q_sk, self.sk, scorer=fuzz.token_set_ratio, limit=150) if q_sk else []
         idx = {i for _, _, i in pool}
         if public_price:  # also rank inside the price window so cheap/common names are not crowded out
             win = [i for i, mp in enumerate(self.price)
@@ -67,6 +67,8 @@ class Master:
             brand = self._brand(q_sk, self.sk[i])
             # price is a strong filter when we have it; names carry the rest
             score = 0.40 * name_score + 0.20 * brand + 0.25 * n_score * 100 + 0.15 * p_score * 100
+            if boost:
+                score += boost(self.code[i])
             out.append(Candidate(self.code[i], self.name[i], self.price[i], round(score, 1),
                                  {"name": round(name_score), "brand": round(brand),
                                   "nums": round(n_score, 2), "price": round(p_score, 2)}))
