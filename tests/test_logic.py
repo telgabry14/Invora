@@ -116,3 +116,35 @@ def test_arabic_name_column_disambiguates_similar_brands(tmp_path):
     assert m.match("هير اند نيلز 10 مجم", 250)[0].code == "3"
     assert m.match("HAIR AND NAILS 10MG 30 TABLETS", 256)[0].code == "3"
     assert len({c.code for c in m.match("ليمتلس مان مالتى جاميز 90", 345, k=5)}) == len(m.match("ليمتلس مان مالتى جاميز 90", 345, k=5))
+
+
+def test_review_workbook_round_trip_and_learning(tmp_path):
+    """Build a workbook (no crops), simulate a human review, read it back and learn from it."""
+    import openpyxl
+    from invora_reader import learned, review_book
+    base = dict(supplier="ابن سينا", invoice_key="K1", scan_date="2026-10-31", page=1, y=500, template="ibn", layout="B",
+                supplier_item_code="679934", file="x.pdf", item_name="VEE FERRO 30 CAP", match_score=80, status="review",
+                name_on_scan="HAIR AND NAILS 60 PIECES", item_code="2", alt_2="", alt_3="", qty=1)
+    auto = dict(base, item_code="9", status="auto", supplier_item_code="111111", name_on_scan="XATRAL XL 10MG")
+    path = tmp_path / "review.xlsx"
+    info = review_book.build([base, auto], str(path), sample_auto=5, crops={})
+    assert info["review"] == 1 and info["sample"] == 1
+    wb = openpyxl.load_workbook(path)
+    ws = wb[review_book.SHEET_REVIEW]
+    head = [c.value for c in ws[1]]
+    ws.cell(row=2, column=head.index("الكود المؤكد") + 1, value="1")      # the human fixes the code ...
+    ws.cell(row=2, column=head.index("تمت المراجعة") + 1, value="✘")      # ... and marks it
+    ws2 = wb[review_book.SHEET_SAMPLE]
+    ws2.cell(row=2, column=head.index("تمت المراجعة") + 1, value="✔")      # auto line confirmed correct
+    wb.save(path)
+    rows = review_book.read(str(path))
+    d = review_book.decisions(rows)
+    assert d["corrected"] == 1 and d["confirmed"] == 1 and d["auto_checked"] == 1 and d["auto_correct"] == 1
+    store = {}
+    assert learned.learn_rows(store, rows) == 2
+    assert learned.lookup(store, "ibn", {"code_sup": "679934", "margin": 0, "name_ar": ""})[0] == "1"
+    # untouched rows teach nothing
+    wb = openpyxl.load_workbook(path)
+    wb[review_book.SHEET_REVIEW].cell(row=2, column=head.index("تمت المراجعة") + 1).value = None   # cell(value=None) is a no-op
+    wb.save(path)
+    assert learned.learn_rows({}, review_book.read(str(path))) == 1

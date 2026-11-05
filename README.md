@@ -1,5 +1,25 @@
 # Invora Reader — قراءة فواتير الموردين الممسوحة
 
+## الحجر الأساس: حلقة «اقرأ ← راجع ← اتعلّم»
+```
+ scans/*.pdf ──read──▶ out/upload.csv  (status = auto | review)
+                          │
+                          ├─ auto  ─────────────▶ سكريبت الرفع على سوفتك  (docs/UPLOAD_SCHEMA.md)
+                          │
+                          └─ review ─ review ─▶ review.xlsx  (صورة السطر + الأعمدة + الكود المقترح)
+                                                    │  تصحّح وتعلّم ✔/✘
+                                                    ▼
+                                      learn ─▶ learned.json ─▶ القراءة الجاية أدق (--learned)
+```
+كل تصحيح بتعمله بيتحوّل لقاعدة بتتطبق تلقائيًا، وعينة «تلقائي» جوه الملف بتقيس الدقة الحقيقية. التفاصيل: `docs/MATCHING.md` (طريقة المطابقة)، `docs/UPLOAD_SCHEMA.md` (عقد الداتا).
+
+```bash
+python -m invora_reader read scans/*.pdf --master master.xlsx --system export1.htm export2.htm --out out/ [--learned learned.json]
+python -m invora_reader review out/invoices.json --pdf-dir scans/ --out review.xlsx      # ملف المراجعة
+python -m invora_reader learn review.xlsx --store learned.json                           # اتعلّم من اللي راجعته
+```
+
+
 أداة Python محلية (OCR بـ Tesseract، من غير إنترنت) بتقرأ فواتير الموردين الممسوحة (PDF)، وتطلّع:
 الأصناف، الكميات، الأسعار، الخصومات، وتطابق كل صنف مع **ماستر الأصناف** (كود سوفتك)، وتربط الفاتورة بإدخالها
 في السيستم للتحقق.

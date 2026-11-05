@@ -7,7 +7,7 @@ import json
 import os
 import sys
 
-from . import export, harvest, learned, link, pipeline, system_export
+from . import export, harvest, learned, link, pipeline, review_book, system_export
 from .match import Master
 
 
@@ -22,15 +22,27 @@ def main(argv=None) -> int:
     r.add_argument("--learned", help="alias memory (json) built with the 'learn' command")
     r.add_argument("--dpi", type=int, default=300)
     r.add_argument("--workers", type=int, default=4)
-    L = sub.add_parser("learn", help="remember the item codes confirmed in a reviewed upload.csv")
-    L.add_argument("reviewed_csv")
+    L = sub.add_parser("learn", help="remember the item codes confirmed in a reviewed workbook (.xlsx) or upload.csv")
+    L.add_argument("reviewed_csv", help="review.xlsx (preferred) or a reviewed upload.csv")
     L.add_argument("--store", default="learned.json")
+    V = sub.add_parser("review", help="build the review workbook (scan crop + proposal per line) from a finished run")
+    V.add_argument("invoices_json", help="out/invoices.json")
+    V.add_argument("--pdf-dir", required=True, help="folder with the scanned PDFs")
+    V.add_argument("--out", default="review.xlsx")
+    V.add_argument("--sample-auto", type=int, default=150, help="how many 'auto' lines to include to measure real precision")
+    V.add_argument("--workers", type=int, default=4)
     H = sub.add_parser("harvest", help="draft Arabic names for the master from scans linked to Softec")
     H.add_argument("invoices_json", help="out/invoices.json from a 'read --system' run")
     H.add_argument("--master", required=True)
     H.add_argument("--system", nargs="+", required=True)
     H.add_argument("--out", default="arabic_names.csv")
     a = ap.parse_args(argv)
+    if a.cmd == "review":
+        invs = json.load(open(a.invoices_json, encoding="utf-8"))
+        rows = [r for i in invs for r in export.rows_for_invoice(i) if not export.is_noise(r)]
+        info = review_book.build(rows, a.out, pdf_dir=a.pdf_dir, sample_auto=a.sample_auto, workers=a.workers)
+        print(f"{a.out}: {info['review']} lines to review, {info['sample']} auto sample, {info['crops']} scan crops")
+        return 0
     if a.cmd == "harvest":
         master = Master.from_xlsx(a.master)
         by_doc = {s["doc"]: s for f in a.system for s in system_export.parse(f)}
@@ -44,7 +56,16 @@ def main(argv=None) -> int:
         return 0
     if a.cmd == "learn":
         store = learned.load(a.store)
-        n = learned.learn_csv(store, a.reviewed_csv)
+        if a.reviewed_csv.lower().endswith(".xlsx"):
+            rows = review_book.read(a.reviewed_csv)
+            d = review_book.decisions(rows)
+            print("review summary:", d)
+            if d["auto_checked"]:
+                print(f"measured precision of the auto rule: {d['auto_correct']}/{d['auto_checked']} "
+                      f"= {100 * d['auto_correct'] / d['auto_checked']:.1f}%")
+            n = learned.learn_rows(store, rows)
+        else:
+            n = learned.learn_csv(store, a.reviewed_csv)
         learned.save(store, a.store)
         print(f"learned {n} rows -> {a.store} ({len(store)} aliases)")
         return 0

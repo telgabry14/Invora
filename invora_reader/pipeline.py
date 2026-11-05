@@ -143,7 +143,9 @@ def group_invoices(pages: List[Dict]) -> List[Dict]:
                          "pages": [], "lines": [], "totals": {}, "warnings": []})
         inv = invs[-1]
         inv["pages"].append(pg["page"])
-        inv["lines"].extend(pg["lines"])
+        for l in pg["lines"]:
+            l["page"] = pg["page"]          # needed later to cut the scan crop for each line
+            inv["lines"].append(l)
         inv["warnings"].extend(f"p{pg['page']}: {w}" for w in pg.get("warnings", []))
         if pg["totals"]:
             last = h["pages"] is None or h["page"] is None or h["page"] == h["pages"]

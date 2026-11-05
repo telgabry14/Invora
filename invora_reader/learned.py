@@ -59,3 +59,26 @@ def learn_csv(store: Dict, path: str) -> int:
             store[k][code] = store[k].get(code, 0) + 1
             n += 1
     return n
+
+
+def learn_rows(store: Dict, rows) -> int:
+    """Learn from reviewed workbook rows: only rows a person marked (✔/✘) with a confirmed code."""
+    n = 0
+    for r in rows:
+        if not (r.get("reviewed") or "").strip():
+            continue
+        code = str(r.get("confirmed") or "").strip()
+        if code.endswith(".0"):
+            code = code[:-2]
+        if not code:
+            continue
+        line = {"name_ar": r.get("name_on_scan") or "", "code_sup": (str(r["supplier_item_code"]) if r.get("supplier_item_code") else None)}
+        if r.get("layout") == "B":
+            line["margin"] = 0
+        k = alias_key(r.get("template") or "", line)
+        if not k:
+            continue
+        store.setdefault(k, {})
+        store[k][code] = store[k].get(code, 0) + 1
+        n += 1
+    return n

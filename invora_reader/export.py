@@ -60,6 +60,8 @@ def rows_for_invoice(inv: Dict) -> List[Dict]:
             "scan_date": inv.get("date"),
             "file": inv.get("file"),
             "pages": ",".join(map(str, inv.get("pages", []))),
+            "page": l.get("page"),
+            "y": l.get("y"),
             "line": n,
             "item_code": c[0]["code"] if c else "",
             "item_name": c[0]["name"] if c else "",
