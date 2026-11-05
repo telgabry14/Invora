@@ -12,14 +12,27 @@ import os
 from collections import Counter
 from typing import Dict, Optional
 
-from .translit import skeleton_words
+import re
+
+from rapidfuzz import fuzz, process
+
+from .translit import arabic_norm
+
+
+def _norm_text(name: str) -> str:
+    """Specific, order-insensitive text key: Arabic letters normalised (alef/ya/ta-marbuta) or Latin upper-case,
+    digits kept. NOT the phonetic skeleton: 'وومان' (WOMAN) and 'مان' (MAN) share a skeleton and must not collide."""
+    ar = arabic_norm(name or "")
+    if ar:
+        return ar
+    return " ".join(re.findall(r"[A-Z]+|\d+", (name or "").upper()))
 
 
 def alias_key(template: str, line: Dict) -> Optional[str]:
     if template == "ibn" and line.get("code_sup") and "margin" in line:
         return f"ibn|code|{line['code_sup']}"
-    sk = "".join(skeleton_words(line.get("name_ar", "") or line.get("name_on_scan", "")))
-    return f"{template}|name|{sk}" if len(sk) >= 5 else None
+    t = _norm_text(line.get("name_ar", "") or line.get("name_on_scan", ""))
+    return f"{template}|name|{t}" if len(t.replace(" ", "")) >= 6 else None
 
 
 def load(path: Optional[str]) -> Dict[str, Dict[str, int]]:
@@ -32,13 +45,39 @@ def save(store: Dict, path: str) -> None:
     json.dump(store, open(path, "w", encoding="utf-8"), ensure_ascii=False, indent=1, sort_keys=True)
 
 
-def lookup(store: Dict, template: str, line: Dict):
-    """-> (code, count) of the majority learned code for this line, or (None, 0)."""
-    k = alias_key(template, line)
-    if not k or k not in store:
+def _major(entry: Dict[str, int]):
+    """(code, count) of the majority code, or (None, 0) when two codes compete (>=40% each)."""
+    ranked = Counter(entry).most_common()
+    total = sum(entry.values())
+    if len(ranked) > 1 and ranked[1][1] / total >= 0.4:
         return None, 0
-    code, n = Counter(store[k]).most_common(1)[0]
-    return code, n
+    return ranked[0]
+
+
+def lookup(store: Dict, template: str, line: Dict, fuzzy: int = 101):
+    """-> (code, count) learned for this line, or (None, 0).
+
+    Exact key first; for name keys also a near-identical OCR reading (similarity >= ``fuzzy``) whose
+    neighbours all agree on one code. Ambiguity returns nothing: a wrong boost is worse than none."""
+    k = alias_key(template, line)
+    if not k:
+        return None, 0
+    if k in store:
+        return _major(store[k])
+    if "|name|" not in k:
+        return None, 0
+    prefix = k.split("|name|")[0] + "|name|"
+    keys = [x for x in store if x.startswith(prefix)]
+    if not keys:
+        return None, 0
+    q = k[len(prefix):]
+    qn = set(re.findall(r"\d+", q))
+    near = [x for x, sc, _ in process.extract(k, keys, scorer=fuzz.token_sort_ratio, limit=5)
+            if sc >= fuzzy and set(re.findall(r"\d+", x[len(prefix):])) == qn]   # strengths/counts must be identical
+    codes = {_major(store[x])[0] for x in near}
+    if len(near) and len(codes) == 1 and None not in codes:
+        return _major(store[near[0]])
+    return None, 0
 
 
 def learn_csv(store: Dict, path: str) -> int:

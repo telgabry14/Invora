@@ -22,6 +22,7 @@ from concurrent.futures import ProcessPoolExecutor
 from typing import Dict, List, Optional, Tuple
 
 import openpyxl
+import openpyxl.worksheet.properties
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.worksheet.datavalidation import DataValidation
 
@@ -29,18 +30,20 @@ SHEET_REVIEW = "للمراجعة"
 SHEET_SAMPLE = "عينة تلقائي"
 SHEET_HELP = "تعليمات"
 CROP_HALF_H = 52          # px above/below the row centre at 300 dpi
-CROP_SCALE = 0.62         # shown width ~1330 px: digits stay readable
 
-COLS = [  # (header, key, width)
-    ("#", "n", 5), ("صورة السطر من الفاتورة", "_img", 95), ("المورد", "supplier", 11), ("رقم الفاتورة", "invoice_key", 14),
-    ("تاريخ", "scan_date", 11), ("صفحة", "page", 6),
-    ("الكود المؤكد", "confirmed", 12), ("تمت المراجعة", "reviewed", 10),
-    ("الكود المقترح", "item_code", 11), ("اسم الصنف في الماستر", "item_name", 34), ("الدرجة", "match_score", 7),
-    ("بديل 2", "alt_2", 30), ("بديل 3", "alt_3", 30),
-    ("الاسم على الفاتورة (OCR)", "name_on_scan", 28),
+CROP_W = 1100             # every crop is resized to this width (px), so the image column width is exact
+IMG_COL_W = CROP_W / 7.0 + 2
+ROW_H_PT = 52
+
+COLS = [  # (header, key, width): editable cells first, then the scan crop, then everything that was read
+    ("#", "n", 5), ("الكود المؤكد", "confirmed", 12), ("تمت المراجعة", "reviewed", 9),
+    ("الكود المقترح", "item_code", 11), ("اسم الصنف في الماستر", "item_name", 32), ("الدرجة", "match_score", 7),
+    ("صورة السطر من الفاتورة", "_img", IMG_COL_W),
+    ("الاسم على الفاتورة (OCR)", "name_on_scan", 28), ("بديل 2", "alt_2", 30), ("بديل 3", "alt_3", 30),
     ("الكمية", "qty", 7), ("سعر الصيدلي", "unit_price_net", 10), ("خصم %", "discount_pct", 7), ("سعر الجمهور", "public_price", 9),
     ("تشغيلة", "batch", 12), ("صلاحية", "expiry", 11), ("هامش صيدلي", "margin_pharm", 9), ("ضريبة سطر", "vat_line", 9),
-    ("إجمالي السطر", "line_total", 10), ("ملاحظات آلية", "flags", 28),
+    ("إجمالي السطر", "line_total", 10), ("المورد", "supplier", 11), ("رقم الفاتورة", "invoice_key", 14),
+    ("تاريخ", "scan_date", 11), ("صفحة", "page", 6), ("ملاحظات آلية", "flags", 28),
     ("template", "template", 8), ("layout", "layout", 7), ("supplier_item_code", "supplier_item_code", 12),
     ("file", "file", 14),
 ]
@@ -61,7 +64,8 @@ def _render_crops(args) -> Dict[Tuple[str, int, int], bytes]:
         H, W = clean.shape
         for y in ys:
             y0, y1 = int(max(y - CROP_HALF_H, 0)), int(min(y + CROP_HALF_H, H))
-            im = cv2.resize(clean[y0:y1], None, fx=CROP_SCALE, fy=CROP_SCALE, interpolation=cv2.INTER_AREA)
+            f = CROP_W / W
+            im = cv2.resize(clean[y0:y1], None, fx=f, fy=f, interpolation=cv2.INTER_AREA)
             ok, buf = cv2.imencode(".jpg", im, [cv2.IMWRITE_JPEG_QUALITY, 72])
             if ok:
                 out[(os.path.basename(pdf), page, int(y))] = buf.tobytes()
@@ -108,16 +112,20 @@ def _sheet(wb, title: str, rows: List[Dict], crops: Optional[Dict], sample: bool
             cell.alignment = Alignment(vertical="center", wrap_text=k in ("item_name", "alt_2", "alt_3", "name_on_scan", "flags"))
             if k in ("confirmed", "reviewed"):
                 cell.fill = edit_fill
-        ws.row_dimensions[i].height = int(2 * CROP_HALF_H * CROP_SCALE * 0.78) + 4
+        ws.row_dimensions[i].height = ROW_H_PT
         buf = crops.get((r.get("file"), int(r["page"]), int(r["y"]))) if (crops and r.get("page") and r.get("y")) else None
         if buf:
             img = XlImage(io.BytesIO(buf))
-            ws.add_image(img, f"B{i}")
+            ws.add_image(img, f"{openpyxl.utils.get_column_letter(KEYS.index('_img') + 1)}{i}")
     dv = DataValidation(type="list", formula1='"✔,✘"', allow_blank=True)
     ws.add_data_validation(dv)
     rc = KEYS.index("reviewed") + 1
     dv.add(f"{openpyxl.utils.get_column_letter(rc)}2:{openpyxl.utils.get_column_letter(rc)}{len(rows) + 1}")
-    ws.freeze_panes = "C2"
+    ws.freeze_panes = "G2"
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.paperSize = ws.PAPERSIZE_A3
+    ws.sheet_properties.pageSetUpPr = openpyxl.worksheet.properties.PageSetupProperties(fitToPage=True)
+    ws.page_setup.fitToWidth, ws.page_setup.fitToHeight = 1, 0
     ws.auto_filter.ref = f"A1:{openpyxl.utils.get_column_letter(len(COLS))}{len(rows) + 1}"
     for k in ("template", "layout", "supplier_item_code", "file"):
         ws.column_dimensions[openpyxl.utils.get_column_letter(KEYS.index(k) + 1)].hidden = True
